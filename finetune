@@ -1,0 +1,7 @@
+!git clone https://github.com/THUDM/ChatGLM3
+!pip install -r requirements.txt
+%cd finetune_basemodel_demo
+!pip install -r requirements.txt
+//把torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_GPUS finetune.py 修改为 python finetune.py
+//创建data文件夹并把数据集放在alpaca_data.jsonl文件
+!bash scripts/finetune_lora.sh
