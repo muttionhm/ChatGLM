@@ -1,0 +1,116 @@
+%cd drive/MyDrive
+import locale 
+def getpreferredencoding(do_setlocale = True): 
+ return "UTF-8" 
+locale.getpreferredencoding = getpreferredencoding
+!pip install langchain
+!pip install pypdf
+!pip install Chroma
+!pip install chromadb
+!pip install bitsandbytes
+!pip install accelerate
+!pip install transformers==4.30
+!pip install sentence-transformers
+from transformers import AutoConfig,AutoTokenizer,BitsAndBytesConfig,AutoModelForCausalLM,pipeline
+from langchain import HuggingFacePipeline
+import torch
+import torch.nn
+#加载分词器
+model_name = "THUDM/chatglm3-6b"
+tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True,use_fast=True,pad_token_id = 2)
+#量化参数
+use_4bit = True
+bnb_4bit_compute_dtype = "float16"
+bnb_4bit_quant_type = "nf4"
+use_nested_quant = False
+compute_dtype = getattr(torch, bnb_4bit_compute_dtype)
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=use_4bit,
+    bnb_4bit_quant_type=bnb_4bit_quant_type,
+    bnb_4bit_compute_dtype=compute_dtype,
+    bnb_4bit_use_double_quant=use_nested_quant,
+)
+#加载量化模型
+model = AutoModelForCausalLM.from_pretrained(
+    model_name,
+    quantization_config=bnb_config,
+    trust_remote_code=True
+)
+
+# input_tokenized = tokenizer.encode_plus("你好！你能给我提供一些有关gemini大模型的相关信息吗？",return_tensors="pt")['input_ids'].to('cuda')
+# generated_ids = model.generate(input_tokenized,max_new_tokens=1000,do_sample=True)
+# text =tokenizer.batch_decode(generated_ids)
+# print(text)
+
+
+from langchain.document_loaders import json_loader,PyPDFLoader
+import nest_asyncio
+from langchain.vectorstores import Chroma
+from langchain.document_loaders.chromium import AsyncChromiumLoader
+from langchain.document_transformers import Html2TextTransformer
+from langchain.text_splitter import CharacterTextSplitter
+from langchain.prompts import PromptTemplate
+from langchain.embeddings import HuggingFaceEmbeddings #使用不同的word2vec需要指定——sentence_transformer
+nest_asyncio.apply()
+loader = PyPDFLoader(file_path="MMGCN.pdf")
+doc = loader.load()
+from langchain.embeddings.openai import OpenAIEmbeddings
+embedding = HuggingFaceEmbeddings(
+    model_name="thenlper/gte-large",
+    model_kwargs={"device": "cuda"},
+    encode_kwargs={"normalize_embeddings": True},
+)
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_core.runnables import RunnablePassthrough
+text_splitter = RecursiveCharacterTextSplitter(
+    chunk_size = 1500,
+    chunk_overlap = 150
+)
+split = text_splitter.split_documents(doc)
+persist_directory = 'docs/chroma/'
+
+
+vectordb = Chroma.from_documents(
+    documents=split,
+    embedding=embedding,
+    persist_directory=persist_directory
+)
+pipeline = pipeline(
+    "text-generation",
+    model=model,
+    tokenizer=tokenizer,
+    return_full_text=True,
+    max_new_tokens=200
+    # generation_config = Generation_config
+)
+
+llm = HuggingFacePipeline(
+    pipeline=pipeline,
+    )
+
+prompt_template = """
+### [INST] 
+Instruction: 根据你对MMGCN的了解来回答这个问题。
+这里有一些背景可以帮助你:
+​
+{context}
+​
+### 问题:
+{question} 
+​
+[/INST]
+ """
+from langchain.chains import LLMChain
+prompt = PromptTemplate(
+    input_variables=["context", "question"],
+    template=prompt_template,
+)
+
+query = "MMGCN包含哪些结构？" 
+retriever = vectordb.as_retriever()
+llm_chain = LLMChain(llm=llm, prompt=prompt)
+rag_chain = ( 
+ {"context": retriever, "question": RunnablePassthrough()}
+    | llm_chain
+)
+rag_chain.invoke(query)
